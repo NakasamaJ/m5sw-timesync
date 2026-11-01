@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StopWatch 時刻合わせ</title>
+<meta name="theme-color" content="#111111">
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #1a1a1a;
+    --muted: #666666;
+    --accent: #e8730c;
+    --ok: #1f8a3b;
+    --err: #c62828;
+    --card: #f4f4f4;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #111111;
+      --fg: #eeeeee;
+      --muted: #a0a0a0;
+      --accent: #ff8a2a;
+      --ok: #5bd17a;
+      --err: #ff6b6b;
+      --card: #1e1e1e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+    line-height: 1.6;
+  }
+  main { max-width: 32rem; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 0.95rem; }
+  .clock {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 20px 16px;
+    text-align: center;
+    margin-bottom: 20px;
+  }
+  .clock .label { color: var(--muted); font-size: 0.85rem; }
+  .clock .time { font-size: 2.4rem; font-variant-numeric: tabular-nums; letter-spacing: 0.02em; }
+  .clock .date { color: var(--muted); font-variant-numeric: tabular-nums; }
+  button {
+    width: 100%;
+    min-height: 56px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--accent);
+    color: #ffffff;
+    font-size: 1.1rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  #status { margin-top: 16px; min-height: 3em; }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--err); }
+  details { margin-top: 28px; color: var(--muted); font-size: 0.92rem; }
+  details summary { cursor: pointer; color: var(--fg); }
+  ol { padding-left: 1.3em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>StopWatch 時刻合わせ</h1>
+  <p class="sub">この端末の時刻を、Bluetooth で M5 StopWatch に送ります。</p>
+
+  <div class="clock" aria-live="off">
+    <div class="label">この端末の時刻</div>
+    <div class="time" id="now">--:--:--</div>
+    <div class="date" id="today">----/--/--</div>
+  </div>
+
+  <button id="sync" type="button">StopWatch に時刻を送る</button>
+  <div id="status" role="status" aria-live="polite"></div>
+
+  <details>
+    <summary>使い方</summary>
+    <ol>
+      <li>StopWatch の設定で Bluetooth を入れる（「常に」）。</li>
+      <li>上のボタンを押し、一覧から「M5 StopWatch」を選ぶ。</li>
+      <li>初めてのときはペアリングを求められるので許可する。</li>
+      <li>StopWatch が短く振動したら完了。</li>
+    </ol>
+    <p>Android の Chrome、Windows の Chrome / Edge で使えます。Linux の Chrome では Web Bluetooth が既定で無効のことがあります。</p>
+  </details>
+</main>
+<script>
+  // 本体側 (src/device/ble_hid.hpp) の UUID とそろえる
+  const SERVICE = "7580cd9f-bd8c-4b9f-b3f1-abffc33388a4";
+  const CHAR = "b5f8b129-6165-4214-b65c-6bc17d9c36f7";
+
+  const $ = (id) => document.getElementById(id);
+  const pad = (n) => String(n).padStart(2, "0");
+
+  function tick() {
+    const d = new Date();
+    $("now").textContent = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+    $("today").textContent = `${d.getFullYear()}/${pad(d.getMonth() + 1)}/${pad(d.getDate())}`;
+  }
+  tick();
+  setInterval(tick, 250);
+
+  function setStatus(text, kind) {
+    const el = $("status");
+    el.textContent = text;
+    el.className = kind || "";
+  }
+
+  // 年 (2 バイト、小さい桁が先)・月・日・時・分・秒 の 7 バイト。現地時刻
+  function encode(d) {
+    const y = d.getFullYear();
+    return new Uint8Array([y & 0xff, y >> 8, d.getMonth() + 1, d.getDate(), d.getHours(), d.getMinutes(), d.getSeconds()]);
+  }
+
+  async function sync() {
+    if (!navigator.bluetooth) {
+      setStatus("このブラウザでは Bluetooth が使えません。Android または Windows の Chrome で開いてください。", "err");
+      return;
+    }
+    const btn = $("sync");
+    btn.disabled = true;
+    let device;
+    try {
+      setStatus("StopWatch を探しています…");
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: "M5 StopWatch" }],
+        optionalServices: [SERVICE],
+      });
+      setStatus("接続しています…");
+      const server = await device.gatt.connect();
+      const service = await server.getPrimaryService(SERVICE);
+      const ch = await service.getCharacteristic(CHAR);
+      // 秒の変わり目に合わせて送る (ずれを 1 秒未満にする)
+      await new Promise((r) => setTimeout(r, 1000 - (Date.now() % 1000)));
+      const d = new Date();
+      await ch.writeValueWithResponse(encode(d));
+      setStatus(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} を送りました。`, "ok");
+    } catch (e) {
+      if (e && e.name === "NotFoundError") setStatus("選ばれませんでした。もう一度押してください。");
+      else setStatus(`送れませんでした: ${e && e.message ? e.message : e}`, "err");
+    } finally {
+      try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
+      btn.disabled = false;
+    }
+  }
+  $("sync").addEventListener("click", sync);
+</script>
+</body>
+</html>
