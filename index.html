@@ -59,9 +59,17 @@
     cursor: pointer;
   }
   button:disabled { opacity: 0.5; cursor: default; }
-  #status { margin-top: 16px; min-height: 3em; }
+  #status { margin-top: 16px; min-height: 3em; font-size: 1.05rem; }
+  #status.ok, #status.err {
+    font-size: 1.25rem;
+    font-weight: 700;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--card);
+  }
   #status.ok { color: var(--ok); }
   #status.err { color: var(--err); }
+  #status .hint { display: block; margin-top: 6px; font-size: 0.95rem; font-weight: 400; color: var(--muted); }
   details { margin-top: 28px; color: var(--muted); font-size: 0.92rem; }
   details summary { cursor: pointer; color: var(--fg); }
   ol { padding-left: 1.3em; }
@@ -84,10 +92,10 @@
   <details>
     <summary>使い方</summary>
     <ol>
-      <li>StopWatch の設定で Bluetooth を入れる（「常に」）。</li>
+      <li>StopWatch で「設定 → Bluetooth の詳細 → 時刻合わせ」を開く（2 分間待ち受けます）。</li>
       <li>上のボタンを押し、一覧から「M5 StopWatch」を選ぶ。</li>
-      <li>初めてのときはペアリングを求められるので許可する。</li>
-      <li>StopWatch が短く振動したら完了。</li>
+      <li>初めてのときはペアリングを求められるので許可する。うまくいかなければ、もう一度ボタンを押す。</li>
+      <li>StopWatch が短く振動し「時刻を合わせました」と出たら完了。</li>
     </ol>
     <p>Android の Chrome、Windows の Chrome / Edge で使えます。Linux の Chrome では Web Bluetooth が既定で無効のことがあります。</p>
   </details>
@@ -108,9 +116,15 @@
   tick();
   setInterval(tick, 250);
 
-  function setStatus(text, kind) {
+  function setStatus(text, kind, hint) {
     const el = $("status");
     el.textContent = text;
+    if (hint) {
+      const h = document.createElement("span");
+      h.className = "hint";
+      h.textContent = hint;
+      el.appendChild(h);
+    }
     el.className = kind || "";
   }
 
@@ -142,10 +156,14 @@
       await new Promise((r) => setTimeout(r, 1000 - (Date.now() % 1000)));
       const d = new Date();
       await ch.writeValueWithResponse(encode(d));
-      setStatus(`${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} を送りました。`, "ok");
+      setStatus(`✓ ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())} を送りました`, "ok",
+                "StopWatch が振動して「時刻を合わせました」と出ていれば完了です。");
     } catch (e) {
       if (e && e.name === "NotFoundError") setStatus("選ばれませんでした。もう一度押してください。");
-      else setStatus(`送れませんでした: ${e && e.message ? e.message : e}`, "err");
+      else setStatus("送れませんでした。もう一度ボタンを押してください。", "err",
+                     "初めてのときは、ペアリングの直後にもう一度押す必要があることがあります。" +
+                     "StopWatch で「時刻合わせ」を開いているかも確かめてください。" +
+                     (e && e.message ? `（${e.message}）` : ""));
     } finally {
       try { if (device && device.gatt.connected) device.gatt.disconnect(); } catch (_) {}
       btn.disabled = false;
